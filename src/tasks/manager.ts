@@ -203,13 +203,25 @@ export class TaskManager {
         }
 
         context.phase = 'verifying';
-        const gateResults = this.runGates(context.worktreePath, changedFiles);
+        const gateResults = await this.runGates(context.worktreePath, changedFiles);
 
         if (this.config.quality.enforceGates && !this.quality.allPassed(gateResults)) {
             await this.block(
                 issue,
                 'Quality gates failed, so no pull request was opened.',
                 this.quality.getFailureDetails(gateResults)
+            );
+            return;
+        }
+
+        // Gates must not rewrite tracked files: otherwise the commit would differ
+        // from the tree that was verified (SPM resolution, xcodebuild side effects).
+        const gateSideEffects = this.delivery.trackedModifications(context.worktreePath);
+        if (gateSideEffects.length > 0) {
+            await this.block(
+                issue,
+                'The verification step modified tracked files, so the tested tree no longer matches what would be committed.',
+                `\n\n\`\`\`\n${gateSideEffects.join('\n')}\n\`\`\``
             );
             return;
         }
@@ -250,7 +262,7 @@ ${this.quality.getSummary(gateResults)}
 Merging is manual: ask for changes on the PR, or reply here to have the agent continue.`);
     }
 
-    private runGates(worktreePath: string, changedFiles: string[]): QualityResult[] {
+    private async runGates(worktreePath: string, changedFiles: string[]): Promise<QualityResult[]> {
         if (!this.config.quality.enforceGates) {
             logger.warn('Quality gates are disabled (ENFORCE_QUALITY_GATES=false)');
             return [];

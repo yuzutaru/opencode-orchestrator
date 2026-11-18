@@ -37,7 +37,9 @@ Branch: \`${branchName}\`"
 
 ## Verification before you finish
 
-Run the checks for the platform you touched and report their result.
+Run the fast checks for the platform you touched and report their result. The
+orchestrator runs the full unit **and** UI suites afterwards, so do not spend
+time on simulators or emulators yourself.
 
 Android:
 

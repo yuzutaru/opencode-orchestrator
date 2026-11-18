@@ -1,9 +1,17 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Load environment variables
 dotenv.config();
+
+/**
+ * Repository root of the orchestrator itself (`dist/` at runtime, `src/` under
+ * tsx). Used to locate the quality-gate scripts that must stay outside the
+ * repository under test.
+ */
+const orchestratorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * Configuration schema with validation
@@ -40,7 +48,24 @@ const configSchema = z.object({
     // Quality gates
     quality: z.object({
         enforceGates: z.boolean().default(true),
-        timeoutMinutes: z.number().min(1).max(90).default(25),
+        /** Timeout for the cheap unit-test gates. */
+        timeoutMinutes: z.number().min(1).max(120).default(30),
+        /** Timeout for the device-backed UI/instrumented gates. */
+        uiTimeoutMinutes: z.number().min(1).max(180).default(45),
+        /** Timeout for the shared-contract parity scripts. */
+        contractTimeoutMinutes: z.number().min(1).max(60).default(10),
+        /** Run Android instrumented tests when `android/` changed. */
+        androidUiTests: z.boolean().default(true),
+        /** Run iOS UI tests when `ios/` changed. */
+        iosUiTests: z.boolean().default(true),
+        /** Refuse to start a device gate with less free space than this. */
+        minFreeGb: z.number().min(0).max(500).default(10),
+        /** AVD name used by the Android instrumented gate. */
+        avd: z.string().default('Pixel_10a'),
+        /** Simulator device name used by the iOS gates. */
+        iosDevice: z.string().default('iPhone 18 Pro'),
+        /** Directory holding the gate lifecycle scripts (outside the tested repo). */
+        gateScriptsDir: z.string().default(path.join(orchestratorRoot, 'scripts', 'gates')),
     }),
 
     // Task state
@@ -98,7 +123,15 @@ export function loadConfig(): Config {
         },
         quality: {
             enforceGates: parseBoolean(process.env.ENFORCE_QUALITY_GATES, true),
-            timeoutMinutes: parseNumber(process.env.QUALITY_TIMEOUT_MINUTES, 25),
+            timeoutMinutes: parseNumber(process.env.QUALITY_TIMEOUT_MINUTES, 30),
+            uiTimeoutMinutes: parseNumber(process.env.QUALITY_UI_TIMEOUT_MINUTES, 45),
+            contractTimeoutMinutes: parseNumber(process.env.QUALITY_CONTRACT_TIMEOUT_MINUTES, 10),
+            androidUiTests: parseBoolean(process.env.QUALITY_ANDROID_UI_TESTS, true),
+            iosUiTests: parseBoolean(process.env.QUALITY_IOS_UI_TESTS, true),
+            minFreeGb: parseNumber(process.env.QUALITY_MIN_FREE_GB, 10),
+            avd: process.env.LEVELA_AVD || 'Pixel_10a',
+            iosDevice: process.env.LEVELA_IOS_DEVICE || 'iPhone 18 Pro',
+            gateScriptsDir: process.env.QUALITY_GATE_SCRIPTS_DIR || path.join(orchestratorRoot, 'scripts', 'gates'),
         },
         taskState: {
             worktreeRetentionDays: parseNumber(process.env.WORKTREE_RETENTION_DAYS, 7),
@@ -131,15 +164,21 @@ export function getRepoInfo(config: Config): { owner: string; repo: string } {
 }
 
 /**
- * Get worktree path for an issue.
+ * Directory holding every issue worktree.
  *
  * `WORKTREE_DIR` may be relative to PROJECT_PATH (`../levela-worktrees`) or absolute.
  */
-export function getWorktreePath(config: Config, issueNumber: number): string {
-    const base = path.isAbsolute(config.opencode.worktreeDir)
+export function getWorktreeBase(config: Config): string {
+    return path.isAbsolute(config.opencode.worktreeDir)
         ? config.opencode.worktreeDir
         : path.join(config.opencode.projectPath, config.opencode.worktreeDir);
-    return path.join(base, `issue-${issueNumber}`);
+}
+
+/**
+ * Get worktree path for an issue.
+ */
+export function getWorktreePath(config: Config, issueNumber: number): string {
+    return path.join(getWorktreeBase(config), `issue-${issueNumber}`);
 }
 
 /**
