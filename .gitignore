@@ -31,4 +31,4 @@ coverage/
 
 .specstory/
 
-.worktrees/
+.worktrees/.state/

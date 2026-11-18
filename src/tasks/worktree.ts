@@ -1,8 +1,9 @@
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { Config, getWorktreePath } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { botGitEnv } from '../utils/git.js';
 
 const logger = createLogger('worktree');
 
@@ -95,6 +96,8 @@ export class WorktreeManager {
             }
 
             logger.info({ issueNumber, worktreePath, branchName }, 'Created worktree');
+
+            this.prepareWorktree(worktreePath);
             return worktreePath;
         } catch (error: unknown) {
             // Format error message for readability
@@ -102,6 +105,27 @@ export class WorktreeManager {
             const errorMessage = err.stderr ? err.stderr.toString() : err.message || String(error);
             logger.error({ issueNumber, error: errorMessage }, 'Failed to create worktree');
             throw error;
+        }
+    }
+
+    /**
+     * Make a fresh worktree buildable.
+     *
+     * `android/local.properties` is gitignored, so a new worktree has no SDK path
+     * and every Gradle gate would fail. Copy the local one when present.
+     */
+    private prepareWorktree(worktreePath: string): void {
+        const source = path.join(this.config.opencode.projectPath, 'android', 'local.properties');
+        const target = path.join(worktreePath, 'android', 'local.properties');
+
+        try {
+            if (fs.existsSync(source) && !fs.existsSync(target)) {
+                fs.mkdirSync(path.dirname(target), { recursive: true });
+                fs.copyFileSync(source, target);
+                logger.info({ worktreePath }, 'Copied android/local.properties into worktree');
+            }
+        } catch (error) {
+            logger.warn({ error, worktreePath }, 'Could not copy android/local.properties');
         }
     }
 
@@ -223,6 +247,7 @@ export class WorktreeManager {
             execSync(`git push -u origin ${branchName}`, {
                 cwd: worktreePath,
                 stdio: 'pipe',
+                env: botGitEnv(),
             });
             logger.info({ issueNumber, branchName }, 'Pushed branch to origin');
         } catch (error) {
