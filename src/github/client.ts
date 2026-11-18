@@ -100,6 +100,35 @@ export class GitHubClient {
     }
 
     /**
+     * Get a single issue with its comments
+     */
+    async getIssue(issueNumber: number): Promise<Issue | null> {
+        try {
+            const response = await this.octokit.issues.get({
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber,
+            });
+
+            const comments = await this.getIssueComments(issueNumber);
+            const issue = response.data;
+
+            return {
+                number: issue.number,
+                title: issue.title,
+                body: issue.body || '',
+                labels: issue.labels.map((l) => (typeof l === 'string' ? l : l.name || '')),
+                comments,
+                createdAt: issue.created_at,
+                updatedAt: issue.updated_at,
+            };
+        } catch (error) {
+            logger.error({ error, issueNumber }, 'Failed to fetch issue');
+            return null;
+        }
+    }
+
+    /**
      * Get comments for an issue (with pagination to get all comments)
      */
     async getIssueComments(issueNumber: number): Promise<Comment[]> {
@@ -210,7 +239,8 @@ export class GitHubClient {
         title: string,
         body: string,
         head: string,
-        base: string = 'main'
+        base: string = 'main',
+        draft: boolean = false
     ): Promise<PullRequest> {
         try {
             const response = await this.octokit.pulls.create({
@@ -220,6 +250,7 @@ export class GitHubClient {
                 body,
                 head,
                 base,
+                draft,
             });
 
             logger.info({ prNumber: response.data.number, title }, 'Created pull request');

@@ -1,6 +1,5 @@
-import { execSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { Config } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -8,8 +7,10 @@ const logger = createLogger('quality');
 
 export interface QualityGate {
     name: string;
-    commands: string[];
-    required: boolean;
+    command: string;
+    args: string[];
+    /** Working directory, relative to the worktree root. */
+    cwd: string;
 }
 
 export interface QualityResult {
@@ -17,162 +18,153 @@ export interface QualityResult {
     passed: boolean;
     output: string;
     error?: string;
+    durationMs: number;
 }
 
 /**
- * Quality gate runner
+ * Levela quality gates.
+ *
+ * The upstream implementation only understood Node projects (`npm run lint`,
+ * `tsc --noEmit`, ...), which silently passed for this repository. These gates
+ * mirror `.github/workflows/ci.yml`: Android gets a debug build plus unit tests,
+ * iOS gets a simulator build, and any change under `assets/` must keep the
+ * cross-platform parity contracts green.
  */
 export class QualityGateRunner {
-    constructor(private config: Config) { }
+    constructor(private config: Config) {}
 
-    /**
-     * Detect available quality gates based on project setup
-     */
-    detectGates(worktreePath: string): QualityGate[] {
+    detectGates(worktreePath: string, changedFiles: string[]): QualityGate[] {
+        const touches = (prefix: string) => changedFiles.some((file) => file.startsWith(prefix));
         const gates: QualityGate[] = [];
 
-        // Check for package.json
-        const packageJsonPath = path.join(worktreePath, 'package.json');
-        if (fs.existsSync(packageJsonPath)) {
-            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-            const scripts = packageJson.scripts || {};
-
-            // Linting
-            if (scripts.lint) {
-                gates.push({ name: 'Linting', commands: ['npm', 'run', 'lint'], required: true });
-            } else if (fs.existsSync(path.join(worktreePath, '.eslintrc.js')) ||
-                fs.existsSync(path.join(worktreePath, '.eslintrc.json')) ||
-                fs.existsSync(path.join(worktreePath, 'eslint.config.js'))) {
-                gates.push({ name: 'Linting', commands: ['npx', 'eslint', '.'], required: true });
-            }
-
-            // Type checking
-            if (scripts['type-check']) {
-                gates.push({ name: 'Type Checking', commands: ['npm', 'run', 'type-check'], required: true });
-            } else if (fs.existsSync(path.join(worktreePath, 'tsconfig.json'))) {
-                gates.push({ name: 'Type Checking', commands: ['npx', 'tsc', '--noEmit'], required: true });
-            }
-
-            // Build
-            if (scripts.build) {
-                gates.push({ name: 'Build', commands: ['npm', 'run', 'build'], required: true });
-            }
-
-            // Tests
-            if (scripts.test) {
-                gates.push({ name: 'Tests', commands: ['npm', 'test'], required: true });
-            }
-
-            // Formatting
-            if (scripts.format) {
-                gates.push({ name: 'Formatting', commands: ['npm', 'run', 'format'], required: false });
-            }
+        if (touches('android/')) {
+            gates.push({
+                name: 'Android build & unit tests',
+                command: './gradlew',
+                args: ['assembleDebug', 'testDebugUnitTest', '--console=plain'],
+                cwd: 'android',
+            });
         }
 
-        // Check for Makefile
-        const makefilePath = path.join(worktreePath, 'Makefile');
-        if (fs.existsSync(makefilePath)) {
-            const makefile = fs.readFileSync(makefilePath, 'utf-8');
-
-            if (makefile.includes('lint:') && !gates.find(g => g.name === 'Linting')) {
-                gates.push({ name: 'Linting', commands: ['make', 'lint'], required: true });
-            }
-            if (makefile.includes('test:') && !gates.find(g => g.name === 'Tests')) {
-                gates.push({ name: 'Tests', commands: ['make', 'test'], required: true });
-            }
-            if (makefile.includes('build:') && !gates.find(g => g.name === 'Build')) {
-                gates.push({ name: 'Build', commands: ['make', 'build'], required: true });
-            }
+        if (touches('ios/')) {
+            gates.push({
+                name: 'iOS simulator build',
+                command: 'xcodebuild',
+                args: ['-scheme', 'Levela', '-destination', 'generic/platform=iOS Simulator', 'build'],
+                cwd: 'ios',
+            });
         }
 
-        // Check for Python projects
-        if (fs.existsSync(path.join(worktreePath, 'pyproject.toml')) ||
-            fs.existsSync(path.join(worktreePath, 'setup.py'))) {
-            if (!gates.find(g => g.name === 'Tests')) {
-                gates.push({ name: 'Tests', commands: ['pytest'], required: true });
-            }
+        if (touches('assets/')) {
+            gates.push(
+                {
+                    name: 'Evidence: theme parity',
+                    command: './scripts/verify_theme_parity.sh',
+                    args: [],
+                    cwd: '.',
+                },
+                {
+                    name: 'Evidence: splash parity',
+                    command: './scripts/verify_splash_parity.sh',
+                    args: ['--strict'],
+                    cwd: '.',
+                },
+                {
+                    name: 'Evidence: onboarding parity',
+                    command: './scripts/verify_onboarding_parity.sh',
+                    args: ['--strict'],
+                    cwd: '.',
+                },
+                {
+                    name: 'Evidence: iOS test mirror parity',
+                    command: './scripts/verify_ios_test_mirror_parity.sh',
+                    args: [],
+                    cwd: '.',
+                }
+            );
         }
 
-        // Check for Rust projects
-        if (fs.existsSync(path.join(worktreePath, 'Cargo.toml'))) {
-            gates.push({ name: 'Linting', commands: ['cargo', 'clippy'], required: true });
-            gates.push({ name: 'Build', commands: ['cargo', 'build'], required: true });
-            gates.push({ name: 'Tests', commands: ['cargo', 'test'], required: true });
+        if (gates.length === 0) {
+            logger.info({ worktreePath }, 'No platform code changed; no quality gates to run');
         }
 
         return gates;
     }
 
-    /**
-     * Run a single quality gate
-     */
     runGate(worktreePath: string, gate: QualityGate): QualityResult {
-        logger.info({ gate: gate.name }, 'Running quality gate');
+        const startedAt = Date.now();
+        const cwd = path.join(worktreePath, gate.cwd);
+
+        logger.info({ gate: gate.name, cwd }, 'Running quality gate');
 
         try {
-            const output = execSync(gate.commands.join(' '), {
-                cwd: worktreePath,
+            const output = execFileSync(gate.command, gate.args, {
+                cwd,
                 encoding: 'utf-8',
                 stdio: ['pipe', 'pipe', 'pipe'],
-                timeout: 300000, // 5 minute timeout
+                timeout: this.config.quality.timeoutMinutes * 60 * 1000,
+                maxBuffer: 32 * 1024 * 1024,
             });
 
-            logger.info({ gate: gate.name }, 'Quality gate passed');
-            return { gate: gate.name, passed: true, output };
+            logger.info({ gate: gate.name, durationMs: Date.now() - startedAt }, 'Quality gate passed');
+            return { gate: gate.name, passed: true, output: output ?? '', durationMs: Date.now() - startedAt };
         } catch (error: any) {
-            const output = error.stdout || '';
-            const errorOutput = error.stderr || error.message;
+            const stdout = typeof error.stdout === 'string' ? error.stdout : error.stdout?.toString?.() ?? '';
+            const stderr = typeof error.stderr === 'string' ? error.stderr : error.stderr?.toString?.() ?? '';
 
-            logger.warn({ gate: gate.name, error: errorOutput }, 'Quality gate failed');
+            logger.warn({ gate: gate.name, error: error.message }, 'Quality gate failed');
             return {
                 gate: gate.name,
                 passed: false,
-                output,
-                error: errorOutput,
+                output: stdout,
+                error: stderr || error.message,
+                durationMs: Date.now() - startedAt,
             };
         }
     }
 
     /**
-     * Run all quality gates
+     * Run every detected gate, stopping at the first failure.
      */
-    runAllGates(worktreePath: string): QualityResult[] {
-        const gates = this.detectGates(worktreePath);
+    runAllGates(worktreePath: string, changedFiles: string[]): QualityResult[] {
         const results: QualityResult[] = [];
 
-        for (const gate of gates) {
+        for (const gate of this.detectGates(worktreePath, changedFiles)) {
             const result = this.runGate(worktreePath, gate);
             results.push(result);
 
-            // Stop on required gate failure
-            if (!result.passed && gate.required) {
-                logger.warn({ gate: gate.name }, 'Required gate failed, stopping');
-                break;
-            }
+            if (!result.passed) break;
         }
 
         return results;
     }
 
-    /**
-     * Check if all required gates passed
-     */
-    allRequiredPassed(results: QualityResult[]): boolean {
-        const gates = this.detectGates(''); // Get gate definitions
-        const requiredGates = gates.filter(g => g.required).map(g => g.name);
+    allPassed(results: QualityResult[]): boolean {
+        return results.every((result) => result.passed);
+    }
 
-        return requiredGates.every(gateName => {
-            const result = results.find(r => r.gate === gateName);
-            return result?.passed ?? false;
-        });
+    getSummary(results: QualityResult[]): string {
+        if (results.length === 0) return '_No quality gates needed for this change._';
+
+        return results
+            .map((result) => {
+                const icon = result.passed ? '✅' : '❌';
+                const seconds = (result.durationMs / 1000).toFixed(0);
+                return `- ${icon} **${result.gate}** (${seconds}s)`;
+            })
+            .join('\n');
     }
 
     /**
-     * Get summary of results
+     * Failure details for the issue comment, trimmed to keep the comment readable.
      */
-    getSummary(results: QualityResult[]): string {
-        return results
-            .map(r => `- ${r.passed ? '✅' : '❌'} ${r.gate}: ${r.passed ? 'Passed' : 'Failed'}`)
-            .join('\n');
+    getFailureDetails(results: QualityResult[]): string {
+        const failed = results.find((result) => !result.passed);
+        if (!failed) return '';
+
+        const body = (failed.error || failed.output || '').trim();
+        const trimmed = body.length > 4000 ? body.slice(-4000) : body;
+
+        return `\n\n### Failing gate: ${failed.gate}\n\n\`\`\`\n${trimmed}\n\`\`\``;
     }
 }
