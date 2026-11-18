@@ -67,6 +67,15 @@ export class DeliveryManager {
     }
 
     /**
+     * Tracked files modified *after* staging, i.e. by the verification gates.
+     * Untracked build output is ignored on purpose (`git diff` skips it).
+     */
+    trackedModifications(worktreePath: string): string[] {
+        const output = this.git(worktreePath, ['diff', '--name-only']);
+        return output.split('\n').map((line) => line.trim()).filter(Boolean);
+    }
+
+    /**
      * Derive a Conventional Commit subject that satisfies scripts/hooks/commit-msg.
      */
     buildSubject(issue: Issue, changedFiles: string[]): string {
@@ -113,7 +122,9 @@ export class DeliveryManager {
             return {
                 ok: false,
                 changedFiles,
-                error: `Changes span both \`android/\` and \`ios/\`, which the repository hooks reject. Split the issue by platform.`,
+                error:
+                    'Changes span both `android/` and `ios/`. Both platform gate sets were run, but ' +
+                    '`scripts/hooks/pre-commit` rejects a mixed commit, so this issue must be split by platform.',
             };
         }
 

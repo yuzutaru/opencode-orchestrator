@@ -31,4 +31,6 @@ coverage/
 
 .specstory/
 
-.worktrees/.state/
+# Orchestrator runtime state (session ids, worktree bookkeeping)
+.state/
+.worktrees/

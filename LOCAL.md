@@ -12,7 +12,7 @@ loop) and no longer applies.
 | Transport | V1 HTTP server API (`/session`, `/event`, `prompt_async`) | `opencode run --format json` (CLI, V2), session resumed with `-s` |
 | Orchestration stack | oh-my-opencode (Sisyphus, Oracle, Ralph loop) | None — plain `build` agent + repo `AGENTS.md` |
 | Delivery | Agent commits, pushes, opens the PR via `gh` | **Orchestrator** commits, pushes, opens a draft PR after gates pass |
-| Quality gates | Node heuristics (`npm run lint`, `tsc`) — vacuous here | Android `assembleDebug testDebugUnitTest`, iOS simulator build, parity scripts |
+| Quality gates | Node heuristics (`npm run lint`, `tsc`) — vacuous here | Per-platform unit **and** UI gates: Android `testDebugUnitTest` + `connectedDebugAndroidTest`, iOS app/package unit tests + `LevelaUITests`, parity scripts |
 | Blocked handling | Agent comments + `ai-blocked` | Same, and the reply check no longer loops on its own comments |
 | Worktrees | `<repo>/.worktrees` | `../levela-worktrees` (outside the repo) |
 
@@ -70,6 +70,41 @@ orchestrator resumes the same session (`--session <id>`, stored in
 
 Quality gates fail or no changes → `ai-blocked` + a comment with the failure
 output, so nothing reaches a PR unverified.
+
+## Quality gates
+
+Gates are selected from the changed paths, so an issue only pays for the platform
+it touches. Unit runs before UI, and the run stops at the first failure.
+
+| Changed | Gates (in order) | Budget |
+| --- | --- | --- |
+| `android/` | `assembleDebug testDebugUnitTest`, then `connectedDebugAndroidTest` (all modules) | 30 + 45 min |
+| `ios/` | app scheme `test -skip-testing:LevelaUITests` + `Today`/`Nutrition` package schemes, then `-only-testing:LevelaUITests` | 30 + 45 min |
+| `assets/` | theme / splash / onboarding / iOS-test-mirror parity | 10 min each |
+| both platforms | both gate sets (then the commit is still rejected by the platform-split hook) | — |
+
+Measured on this machine (Apple M4, 16 GB, warm caches): Android unit ~10 s,
+Android instrumented 36 tests across 5 modules ~50 s plus emulator boot,
+iOS unit 19 tests ~3.5 min, iOS UI 8 tests ~5.7 min.
+
+Device handling lives in `scripts/gates/` **in this orchestrator**, not in the
+repository under test, so an agent cannot weaken the check that verifies it:
+
+- `android-instrumented.sh` reuses an attached emulator whose AVD matches
+  `LEVELA_AVD`, otherwise boots that AVD headlessly (`-no-snapshot`, no
+  window/audio) on a free console port and kills it again. The configured AVD
+  mirrors CI (`api-level: 35, target: google_apis, arm64-v8a`); the API 37
+  images currently fail the onboarding weight-step assertions, so they are not
+  used for verification.
+- `ios-tests.sh` resolves `LEVELA_IOS_DEVICE`, boots it only if shut down, and
+  shuts it down again only if it started it — a simulator you already booted is
+  reused and left running.
+- Both take a device lock, refuse to start below `QUALITY_MIN_FREE_GB`, and
+  write full logs to `<WORKTREE_DIR>/.gate-logs/issue-N/`.
+- iOS runs pass `-onlyUsePackageVersionsFromResolvedFile`; after the gates the
+  orchestrator blocks the issue if a gate modified tracked files, so the commit
+  always matches the verified tree.
+
 
 ## Notes
 

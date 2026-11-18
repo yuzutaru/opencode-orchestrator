@@ -42,6 +42,15 @@ class GitHubTaskOrchestrator {
             model: this.config.opencode.model ?? '(agent default)',
             pollInterval: this.config.scheduler.pollIntervalMs,
             maxConcurrent: this.config.scheduler.maxConcurrentTasks,
+            gates: {
+                androidUi: this.config.quality.androidUiTests,
+                iosUi: this.config.quality.iosUiTests,
+                unitTimeout: this.config.quality.timeoutMinutes,
+                uiTimeout: this.config.quality.uiTimeoutMinutes,
+                minFreeGb: this.config.quality.minFreeGb,
+                avd: this.config.quality.avd,
+                iosDevice: this.config.quality.iosDevice,
+            },
         }, 'Configuration loaded');
 
         this.setupShutdownHandlers();
