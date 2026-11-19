@@ -7,6 +7,7 @@ import { Config } from '../config.js';
 export const Labels = {
     AI_TASK: 'ai-task',
     AI_IN_PROGRESS: 'ai-in-progress',
+    AI_PLAN_PENDING: 'ai-plan-pending',
     AI_BLOCKED: 'ai-blocked',
     AI_REVIEW_READY: 'ai-review-ready',
     AI_DEBUGGING: 'ai-debugging',
@@ -21,6 +22,7 @@ export const Labels = {
 export const LabelColors = {
     [Labels.AI_TASK]: '0e8a16', // Green
     [Labels.AI_IN_PROGRESS]: 'fbca04', // Yellow/Orange
+    [Labels.AI_PLAN_PENDING]: '5319e7', // Violet
     [Labels.AI_BLOCKED]: '7057ff', // Purple
     [Labels.AI_REVIEW_READY]: '1d76db', // Blue
     [Labels.AI_DEBUGGING]: 'd93f0b', // Red/Orange
@@ -43,6 +45,13 @@ export function isReadyForPickup(issue: Issue): boolean {
  */
 export function isInProgress(issue: Issue): boolean {
     return issue.labels.includes(Labels.AI_IN_PROGRESS);
+}
+
+/**
+ * Check if issue is awaiting plan approval
+ */
+export function isPlanPending(issue: Issue): boolean {
+    return issue.labels.includes(Labels.AI_PLAN_PENDING);
 }
 
 /**

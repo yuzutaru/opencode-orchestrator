@@ -141,6 +141,7 @@ Create these labels in your repository:
 |-------|-------|-------------|
 | `ai-task` | `#0e8a16` (Green) | Ready for AI pickup |
 | `ai-in-progress` | `#fbca04` (Yellow) | Currently being worked on |
+| `ai-plan-pending` | `#5319e7` (Violet) | Plan posted, awaiting `/approve` |
 | `ai-blocked` | `#7057ff` (Purple) | Waiting for human clarification |
 | `ai-review-ready` | `#1d76db` (Blue) | PR created, awaiting review |
 | `ai-priority:high` | `#b60205` (Red) | High priority |
@@ -246,11 +247,12 @@ Implement JWT-based authentication for the API.
 ### Workflow
 
 1. **Issue Created** → User adds `ai-task` label
-2. **Orchestrator Picks Up** → Removes `ai-task`, adds `ai-in-progress`
-3. **Agent Works** → Posts progress updates, uses Ralph Loop for implementation
-4. **Quality Gates** → Runs linting, type-checking, tests
-5. **PR Created** → Removes `ai-in-progress`, adds `ai-review-ready`
-6. **Human Reviews** → Merge or request changes
+2. **Plan** → Orchestrator starts a plan mission; the agent explores, posts a plan, and adds `ai-plan-pending`
+3. **Human Approves** → Reply with `/approve` on the issue to start implementation (any other reply revises the plan)
+4. **Agent Works** → Implements the plan, posts progress updates, uses Ralph Loop for implementation
+5. **Quality Gates** → Runs linting, type-checking, tests
+6. **PR Created** → Removes `ai-in-progress`, adds `ai-review-ready`
+7. **Human Reviews** → Merge or request changes
 
 ### Handling Clarifications
 
@@ -278,6 +280,8 @@ If the agent needs clarification:
 | `CI_WAIT_TIMEOUT_MINUTES` | `10` | CI wait timeout |
 | `CHECKPOINT_INTERVAL_MINUTES` | `30` | Checkpoint frequency |
 | `WORKTREE_RETENTION_DAYS` | `7` | Keep worktrees X days |
+| `REQUIRE_PLAN_APPROVAL` | `true` | Require a plan + `/approve` before any code is written |
+| `PLAN_APPROVE_KEYWORD` | `/approve` | Keyword a human must include in a reply to approve the plan |
 
 ## Project Structure
 
