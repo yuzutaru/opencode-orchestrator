@@ -93,9 +93,8 @@ repository under test, so an agent cannot weaken the check that verifies it:
 - `android-instrumented.sh` reuses an attached emulator whose AVD matches
   `LEVELA_AVD`, otherwise boots that AVD headlessly (`-no-snapshot`, no
   window/audio) on a free console port and kills it again. The configured AVD
-  mirrors CI (`api-level: 35, target: google_apis, arm64-v8a`); the API 37
-  images currently fail the onboarding weight-step assertions, so they are not
-  used for verification.
+  runs API 37 (`Pixel_10a`, 16 KB page size), matching the app's compile/target
+  SDK and CI's `google_apis_ps16k` image.
 - `ios-tests.sh` resolves `LEVELA_IOS_DEVICE`, boots it only if shut down, and
   shuts it down again only if it started it — a simulator you already booted is
   reused and left running.
