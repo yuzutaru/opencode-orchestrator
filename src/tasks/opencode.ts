@@ -5,7 +5,12 @@ import { Config } from '../config.js';
 import { Issue } from '../github/client.js';
 import { createLogger } from '../utils/logger.js';
 import { botGitEnv } from '../utils/git.js';
-import { generateOrchestratorPrompt, generateContinuationPrompt } from '../prompts/orchestrator.js';
+import {
+    generateOrchestratorPrompt,
+    generatePlanPrompt,
+    generateApprovalPrompt,
+    generatePlanFeedbackPrompt,
+} from '../prompts/orchestrator.js';
 
 const logger = createLogger('opencode');
 
@@ -74,25 +79,64 @@ export class OpenCodeManager {
     }
 
     /**
+     * Start a plan-only mission for a new issue.
+     *
+     * The agent explores and writes a plan, posts it via `gh issue comment`,
+     * swaps `ai-task` -> `ai-plan-pending`, and ends its turn. No file changes.
+     */
+    async startPlan(issue: Issue, worktreePath: string, branchName: string): Promise<RunResult['sessionId']> {
+        const prompt = generatePlanPrompt(this.config, issue, worktreePath, branchName);
+        const title = `Plan issue #${issue.number}: ${issue.title}`.substring(0, 80);
+        return this.spawnRun(issue.number, worktreePath, prompt, undefined, title);
+    }
+
+    /**
      * Resume a blocked mission with the human's reply.
+     *
+     * @param options.phase - 'implement' (plan was approved), 'feedback' (plan
+     *   needs revision), or 'plan' (restart planning). Defaults to 'implement'.
      */
     async continueTask(
         issue: Issue,
         worktreePath: string,
         previousSessionId: string,
-        newComment: string
+        newComment: string,
+        options: { phase?: 'implement' | 'feedback' | 'plan'; branchName?: string } = {},
     ): Promise<RunResult['sessionId']> {
         if (!previousSessionId) {
             throw new Error(`No previous session for issue #${issue.number}; cannot continue`);
         }
 
-        const prompt = generateContinuationPrompt(
-            this.config,
-            issue,
-            worktreePath,
-            previousSessionId,
-            newComment
-        );
+        const branchName = options.branchName;
+        let prompt: string;
+        switch (options.phase) {
+            case 'feedback':
+                if (!branchName) {
+                    throw new Error(`branchName is required to continue a plan-feedback mission for issue #${issue.number}`);
+                }
+                prompt = generatePlanFeedbackPrompt(
+                    this.config,
+                    issue,
+                    worktreePath,
+                    branchName,
+                    newComment,
+                );
+                break;
+            case 'plan':
+                if (!branchName) {
+                    throw new Error(`branchName is required to continue a plan mission for issue #${issue.number}`);
+                }
+                prompt = generatePlanPrompt(this.config, issue, worktreePath, branchName);
+                break;
+            case 'implement':
+                prompt = generateApprovalPrompt(this.config, issue, worktreePath, branchName ?? '');
+                break;
+            default:
+                // No phase specified: the existing ai-blocked clarification
+                // resume path. Use the standard implementation prompt.
+                prompt = generateOrchestratorPrompt(this.config, issue, worktreePath, branchName ?? '');
+                break;
+        }
 
         return this.spawnRun(issue.number, worktreePath, prompt, previousSessionId);
     }

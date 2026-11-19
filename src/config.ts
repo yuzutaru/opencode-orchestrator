@@ -74,6 +74,14 @@ const configSchema = z.object({
         autoCleanWorktrees: z.boolean().default(false),
     }),
 
+    // Plan-approval gating
+    planning: z.object({
+        /** Require a plan and explicit /approve before any code is written. */
+        requirePlanApproval: z.boolean().default(true),
+        /** Keyword a human must include in a reply to approve the plan. */
+        approveKeyword: z.string().default('/approve'),
+    }),
+
     // Logging
     logging: z.object({
         level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
@@ -136,6 +144,10 @@ export function loadConfig(): Config {
         taskState: {
             worktreeRetentionDays: parseNumber(process.env.WORKTREE_RETENTION_DAYS, 7),
             autoCleanWorktrees: parseBoolean(process.env.AUTO_CLEAN_WORKTREES, false),
+        },
+        planning: {
+            requirePlanApproval: parseBoolean(process.env.REQUIRE_PLAN_APPROVAL, true),
+            approveKeyword: process.env.PLAN_APPROVE_KEYWORD || '/approve',
         },
         logging: {
             level: (process.env.LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') || 'info',
