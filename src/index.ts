@@ -1,24 +1,23 @@
 import cron from 'node-cron';
 import process from 'node:process';
 import { loadConfig, Config } from './config.js';
-import { GitHubClient, Issue } from './github/client.js';
-import { Labels, isReadyForPickup, isBlocked } from './github/labels.js';
+import { GitHubClient } from './github/client.js';
+import { Labels, isReadyForPickup } from './github/labels.js';
 import { TaskManager } from './tasks/manager.js';
 import { WorktreeManager } from './tasks/worktree.js';
-import { OpenCodeServerManager } from './tasks/opencode-server.js';
 import { createLogger } from './utils/logger.js';
 
 const logger = createLogger('orchestrator');
 
 /**
- * Main orchestrator class
+ * Polls GitHub for `ai-task` issues and runs them through the local pipeline:
+ * worktree -> OpenCode mission -> quality gates -> draft PR.
  */
 class GitHubTaskOrchestrator {
     private config: Config;
     private github: GitHubClient;
     private taskManager: TaskManager;
     private worktrees: WorktreeManager;
-    private openCodeServer: OpenCodeServerManager;
     private isShuttingDown = false;
 
     constructor() {
@@ -26,49 +25,45 @@ class GitHubTaskOrchestrator {
         this.github = new GitHubClient(this.config);
         this.taskManager = new TaskManager(this.config);
         this.worktrees = new WorktreeManager(this.config);
-        this.openCodeServer = new OpenCodeServerManager(this.config);
     }
 
-    /**
-     * Start the orchestrator
-     */
     async start(): Promise<void> {
-        // Extract project name from config directory or repo
         const configDir = process.env.CONFIG_DIR || '.';
         const projectName = configDir.split('/').pop() || this.config.github.repo.split('/').pop() || 'default';
-        
-        logger.info('Starting GitHub Task Orchestrator v2.0');
+
+        logger.info('Starting OpenCode GitHub Task Orchestrator (V2 CLI transport)');
         logger.info({
             project: projectName,
             configDir: process.env.CONFIG_DIR || '(root .env)',
             repo: this.config.github.repo,
             projectPath: this.config.opencode.projectPath,
+            worktrees: this.config.opencode.worktreeDir,
+            agent: this.config.opencode.agent,
+            model: this.config.opencode.model ?? '(agent default)',
             pollInterval: this.config.scheduler.pollIntervalMs,
             maxConcurrent: this.config.scheduler.maxConcurrentTasks,
+            gates: {
+                androidUi: this.config.quality.androidUiTests,
+                iosUi: this.config.quality.iosUiTests,
+                unitTimeout: this.config.quality.timeoutMinutes,
+                uiTimeout: this.config.quality.uiTimeoutMinutes,
+                minFreeGb: this.config.quality.minFreeGb,
+                avd: this.config.quality.avd,
+                iosDevice: this.config.quality.iosDevice,
+            },
         }, 'Configuration loaded');
 
-        // Setup graceful shutdown
         this.setupShutdownHandlers();
 
-        // Start OpenCode server (or connect to existing)
-        logger.info('Starting OpenCode server...');
-        await this.openCodeServer.start();
-        logger.info('OpenCode server ready');
-
-        // Run initial poll
         logger.info('Running initial poll...');
         await this.poll();
         logger.info('Initial poll completed');
 
-        // Schedule polling
         const intervalMs = this.config.scheduler.pollIntervalMs;
-        const intervalMinutes = Math.ceil(intervalMs / 60000);
-
-        // Use cron for more reliable scheduling
-        // Poll every minute if interval is less than 1 minute, otherwise use the configured interval
+        const intervalMinutes = Math.max(1, Math.ceil(intervalMs / 60000));
         const cronExpression = intervalMinutes <= 1
-            ? '* * * * *'  // Every minute
-            : `*/${intervalMinutes} * * * *`;  // Every N minutes
+            ? '* * * * *'
+            : `*/${intervalMinutes} * * * *`;
 
         cron.schedule(cronExpression, async () => {
             if (!this.isShuttingDown) {
@@ -77,134 +72,90 @@ class GitHubTaskOrchestrator {
         });
 
         logger.info({ cronExpression }, 'Scheduler started');
-        
-        // Display nice startup banner
-        const configDirDisplay = process.env.CONFIG_DIR || '(root)';
-        const repoName = this.config.github.repo;
+
         console.log('\n╔════════════════════════════════════════════════════════════════╗');
-        console.log(`║  ✅ Orchestrator Running                                       ║`);
+        console.log('║  ✅ Orchestrator running                                       ║');
         console.log('╠════════════════════════════════════════════════════════════════╣');
-        console.log(`║  📁 Config:  ${configDirDisplay.padEnd(48)} ║`);
-        console.log(`║  📦 Repo:    ${repoName.padEnd(48)} ║`);
+        console.log(`║  📦 Repo:    ${this.config.github.repo.padEnd(48)} ║`);
         console.log(`║  📂 Path:    ${this.config.opencode.projectPath.substring(0, 48).padEnd(48)} ║`);
-        console.log(`║  ⏱️  Poll:    Every ${intervalMinutes} min${intervalMinutes !== 1 ? 's' : ' '}${('').padEnd(37)} ║`);
-        console.log(`║  🔢 Tasks:   Max ${this.config.scheduler.maxConcurrentTasks} concurrent${('').padEnd(38)} ║`);
+        console.log(`║  🌳 Trees:   ${this.config.opencode.worktreeDir.substring(0, 48).padEnd(48)} ║`);
+        console.log(`║  ⏱️  Poll:    Every ${intervalMinutes} min${intervalMinutes !== 1 ? 's' : ' '}${''.padEnd(37)} ║`);
+        console.log(`║  🔢 Tasks:   Max ${this.config.scheduler.maxConcurrentTasks} concurrent${''.padEnd(38)} ║`);
         console.log('╠════════════════════════════════════════════════════════════════╣');
         console.log('║  Press Ctrl+C to stop                                          ║');
         console.log('╚════════════════════════════════════════════════════════════════╝\n');
-        
+
         logger.info('Orchestrator is running and waiting for tasks');
     }
 
-    /**
-     * Poll GitHub for tasks
-     */
     private async poll(): Promise<void> {
         logger.debug('Polling GitHub for tasks...');
 
         try {
-            // Check for new tasks
             await this.checkNewTasks();
-
-            // Check for blocked tasks with replies
             await this.checkBlockedTasks();
-
-            // Clean old worktrees if enabled
             await this.worktrees.cleanOldWorktrees();
         } catch (error) {
             logger.error({ error }, 'Error during poll');
         }
     }
 
-    /**
-     * Check for new tasks to pick up
-     */
     private async checkNewTasks(): Promise<void> {
         if (!this.taskManager.canStartNewTask()) {
             logger.debug({
                 active: this.taskManager.getActiveCount(),
-                max: this.config.scheduler.maxConcurrentTasks
+                max: this.config.scheduler.maxConcurrentTasks,
             }, 'At max concurrent tasks');
             return;
         }
 
-        // Get issues with ai-task label, excluding those already in progress
-        const issues = await this.github.getIssuesWithLabel(
-            Labels.AI_TASK,
-            [Labels.AI_IN_PROGRESS]
-        );
+        const issues = await this.github.getIssuesWithLabel(Labels.AI_TASK, [Labels.AI_IN_PROGRESS]);
 
         if (issues.length === 0) {
             logger.debug('No new tasks found');
             return;
         }
 
-        // Sort by priority
-        const sorted = this.github.sortByPriority(issues);
+        for (const issue of this.github.sortByPriority(issues)) {
+            if (!this.taskManager.canStartNewTask()) break;
+            if (!isReadyForPickup(issue)) continue;
+            if (this.taskManager.isRunning(issue.number)) continue;
 
-        // Start tasks up to max concurrent
-        for (const issue of sorted) {
-            if (!this.taskManager.canStartNewTask()) {
-                break;
-            }
-
-            if (isReadyForPickup(issue)) {
-                try {
-                    await this.taskManager.startTask(issue);
-                    logger.info({ issueNumber: issue.number, title: issue.title }, 'Started task');
-                } catch (error: any) {
-                    logger.error({
-                        issueNumber: issue.number,
-                        errorMessage: error.message,
-                        errorStack: error.stack,
-                        rawError: error
-                    }, 'Failed to start task');
-                }
+            try {
+                await this.taskManager.startTask(issue);
+                logger.info({ issueNumber: issue.number, title: issue.title }, 'Started task');
+            } catch (error: any) {
+                logger.error({ issueNumber: issue.number, error: error.message }, 'Failed to start task');
             }
         }
     }
 
-    /**
-     * Check for blocked tasks that have received replies
-     */
     private async checkBlockedTasks(): Promise<void> {
-        // Get issues with ai-blocked label
         const blockedIssues = await this.github.getIssuesWithLabel(Labels.AI_BLOCKED);
 
         for (const issue of blockedIssues) {
-            // Check if there's a new comment from a human
-            const task = this.taskManager.getTask(issue.number);
-            const blockedSince = task?.startedAt || new Date(0);
+            if (this.taskManager.isRunning(issue.number)) continue;
 
-            if (this.github.hasNewComments(issue, blockedSince)) {
-                try {
-                    await this.taskManager.continueBlockedTask(issue);
-                    logger.info({ issueNumber: issue.number }, 'Resumed blocked task');
-                } catch (error) {
-                    logger.error({ error, issueNumber: issue.number }, 'Failed to resume task');
-                }
+            // Only resume when a human replied after the agent asked its question.
+            const since = this.taskManager.getBlockedSince(issue);
+            if (!this.github.hasNewComments(issue, since)) continue;
+
+            try {
+                await this.taskManager.continueBlockedTask(issue);
+                logger.info({ issueNumber: issue.number }, 'Resumed blocked task');
+            } catch (error: any) {
+                logger.error({ issueNumber: issue.number, error: error.message }, 'Failed to resume task');
             }
         }
     }
 
-    /**
-     * Setup graceful shutdown handlers
-     */
     private setupShutdownHandlers(): void {
-        const shutdown = async (signal: string) => {
+        const shutdown = (signal: string) => {
             if (this.isShuttingDown) return;
             this.isShuttingDown = true;
 
             logger.info({ signal }, 'Received shutdown signal');
-
-            // Cleanup tasks
             this.taskManager.shutdown();
-
-            // Stop OpenCode server if we spawned it
-            if (this.openCodeServer.isOwnedProcess()) {
-                await this.openCodeServer.stop();
-            }
-
             logger.info('Shutdown complete');
             process.exit(0);
         };
@@ -214,18 +165,14 @@ class GitHubTaskOrchestrator {
     }
 }
 
-// Main entry point
 async function main(): Promise<void> {
     try {
         const configDir = process.env.CONFIG_DIR;
-        const projectInfo = configDir 
-            ? ` [${configDir.split('/').pop()}]` 
-            : '';
-        
+        const projectInfo = configDir ? ` [${configDir.split('/').pop()}]` : '';
+
         console.log(`🚀 Starting OpenCode GitHub Orchestrator${projectInfo}...`);
         const orchestrator = new GitHubTaskOrchestrator();
         await orchestrator.start();
-        // Process will stay alive due to cron scheduler
     } catch (error) {
         console.error('❌ Failed to start orchestrator:', error);
         logger.error({ error }, 'Failed to start orchestrator');
