@@ -1,21 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { exec as execCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { Config, getBranchName } from '../config.js';
 import { GitHubClient, Issue } from '../github/client.js';
 import { WorktreeManager } from './worktree.js';
 import { OpenCodeManager, RunResult } from './opencode.js';
 import { QualityGateRunner, QualityResult } from './quality.js';
 import { DeliveryManager } from './delivery.js';
-import { Labels } from '../github/labels.js';
+import { Labels, isPlanPending } from '../github/labels.js';
 import { createLogger } from '../utils/logger.js';
 import { createBranchSlug } from '../utils/slug.js';
 
 const logger = createLogger('task-manager');
+const execAsync = promisify(execCb);
 
 const STATE_FILE = path.join(process.cwd(), '.state', 'sessions.json');
 
 export type TaskPhase =
     | 'starting'
+    | 'planning'
     | 'working'
     | 'blocked'
     | 'verifying'
@@ -80,8 +84,14 @@ export class TaskManager {
         this.activeTasks.set(issue.number, context);
 
         try {
-            await this.opencode.startTask(issue, worktreePath, branchName);
-            context.phase = 'working';
+            if (this.config.planning.requirePlanApproval) {
+                await this.opencode.startPlan(issue, worktreePath, branchName);
+                context.phase = 'planning';
+                logger.info({ issueNumber: issue.number }, 'Plan mission started; awaiting human approval');
+            } else {
+                await this.opencode.startTask(issue, worktreePath, branchName);
+                context.phase = 'working';
+            }
         } catch (error: any) {
             this.activeTasks.delete(issue.number);
             await this.block(issue, `Could not start the OpenCode mission: ${error.message}`);
@@ -92,6 +102,10 @@ export class TaskManager {
 
     /**
      * Resume a blocked task after the human replied.
+     *
+     * Handles both the existing `ai-blocked` path and the new `ai-plan-pending`
+     * path: an `/approve` reply starts implementation; anything else revises the
+     * plan and re-posts it for another review.
      */
     async continueBlockedTask(issue: Issue): Promise<TaskContext | null> {
         if (this.activeTasks.has(issue.number)) {
@@ -117,12 +131,15 @@ export class TaskManager {
             return null;
         }
 
+        const planPending = isPlanPending(issue);
+        const approved = planPending && this.isApproved(latestComment.body);
+
         const context: TaskContext = {
             issueNumber: issue.number,
             issue,
             branchName,
             worktreePath,
-            phase: 'working',
+            phase: planPending ? 'planning' : 'working',
             startedAt: new Date(),
             sessionId: this.getSession(issue.number),
         };
@@ -131,13 +148,42 @@ export class TaskManager {
 
         try {
             const sessionId = this.getSession(issue.number);
-            if (sessionId) {
-                await this.opencode.continueTask(issue, worktreePath, sessionId, latestComment.body);
+
+            if (planPending) {
+                // Orchestrator-side label swap so the critical transition can't
+                // be skipped by a misbehaving agent.
+                if (approved) {
+                    await this.github.removeLabel(issue.number, Labels.AI_PLAN_PENDING).catch(() => undefined);
+                    await this.github.addLabel(issue.number, Labels.AI_IN_PROGRESS).catch(() => undefined);
+                    logger.info({ issueNumber: issue.number }, 'Plan approved; implementation starting');
+                }
+
+                if (sessionId) {
+                    await this.opencode.continueTask(
+                        issue,
+                        worktreePath,
+                        sessionId,
+                        latestComment.body,
+                        { phase: approved ? 'implement' : 'feedback', branchName },
+                    );
+                } else {
+                    // Session id was lost (fresh state file): start a new mission
+                    // with the full comment history so the agent still has context.
+                    logger.warn({ issueNumber: issue.number }, 'No stored session id, restarting mission with full history');
+                    if (approved) {
+                        await this.opencode.startTask(issue, worktreePath, branchName);
+                    } else {
+                        await this.opencode.startPlan(issue, worktreePath, branchName);
+                    }
+                }
             } else {
-                // Session id was lost (fresh state file): start a new mission with
-                // the full comment history so the agent still has the context.
-                logger.warn({ issueNumber: issue.number }, 'No stored session id, restarting mission with full history');
-                await this.opencode.startTask(issue, worktreePath, branchName);
+                // Existing ai-blocked continuation path.
+                if (sessionId) {
+                    await this.opencode.continueTask(issue, worktreePath, sessionId, latestComment.body);
+                } else {
+                    logger.warn({ issueNumber: issue.number }, 'No stored session id, restarting mission with full history');
+                    await this.opencode.startTask(issue, worktreePath, branchName);
+                }
             }
         } catch (error: any) {
             this.activeTasks.delete(issue.number);
@@ -145,6 +191,18 @@ export class TaskManager {
         }
 
         return context;
+    }
+
+    /**
+     * Test whether a human comment contains the plan-approval keyword as a
+     * standalone, case-insensitive token.
+     */
+    isApproved(commentBody: string): boolean {
+        const keyword = this.config.planning.approveKeyword.trim();
+        if (!keyword) return false;
+        const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(^|\\s)${escaped}(\\s|$)`, 'i');
+        return re.test(commentBody);
     }
 
     /**
@@ -174,6 +232,13 @@ export class TaskManager {
 
         if (issue.labels.includes(Labels.AI_BLOCKED)) {
             logger.info({ issueNumber: issue.number }, 'Agent asked for clarification; waiting for a human');
+            this.blockedSince.set(issue.number, new Date());
+            return;
+        }
+
+        if (issue.labels.includes(Labels.AI_PLAN_PENDING)) {
+            logger.info({ issueNumber: issue.number }, 'Plan mission complete; awaiting human approval');
+            await this.discardPlanChanges(context.worktreePath);
             this.blockedSince.set(issue.number, new Date());
             return;
         }
@@ -290,6 +355,25 @@ Reply to this issue to let the agent continue, or fix the problem and re-add \`a
         );
 
         this.blockedSince.set(issue.number, new Date());
+    }
+
+    /**
+     * Discard any stray changes left in the worktree after a read-only plan
+     * phase. The plan must not touch files, so anything modified here is a
+     * rule violation and is thrown away before implementation begins.
+     */
+    private async discardPlanChanges(worktreePath: string): Promise<void> {
+        try {
+            await execAsync(`git -C "${worktreePath}" checkout -- .`);
+            const status = await execAsync(`git -C "${worktreePath}" status --porcelain`);
+            if (status.stdout.trim()) {
+                logger.warn({ worktreePath, status: status.stdout.trim() }, 'Untracked plan-phase files remain; leaving them in place');
+            } else {
+                logger.info({ worktreePath }, 'Discarded stray plan-phase changes');
+            }
+        } catch (error: any) {
+            logger.warn({ error, worktreePath }, 'Could not discard plan-phase changes');
+        }
     }
 
     /**

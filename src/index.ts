@@ -109,7 +109,10 @@ class GitHubTaskOrchestrator {
             return;
         }
 
-        const issues = await this.github.getIssuesWithLabel(Labels.AI_TASK, [Labels.AI_IN_PROGRESS]);
+        const issues = await this.github.getIssuesWithLabel(Labels.AI_TASK, [
+            Labels.AI_IN_PROGRESS,
+            Labels.AI_PLAN_PENDING,
+        ]);
 
         if (issues.length === 0) {
             logger.debug('No new tasks found');
@@ -132,8 +135,17 @@ class GitHubTaskOrchestrator {
 
     private async checkBlockedTasks(): Promise<void> {
         const blockedIssues = await this.github.getIssuesWithLabel(Labels.AI_BLOCKED);
+        const planIssues = await this.github.getIssuesWithLabel(Labels.AI_PLAN_PENDING);
 
-        for (const issue of blockedIssues) {
+        // Deduplicate in case an issue somehow carries both labels.
+        const seen = new Set<number>();
+        const allBlocked = [...blockedIssues, ...planIssues].filter((issue) => {
+            if (seen.has(issue.number)) return false;
+            seen.add(issue.number);
+            return true;
+        });
+
+        for (const issue of allBlocked) {
             if (this.taskManager.isRunning(issue.number)) continue;
 
             // Only resume when a human replied after the agent asked its question.
