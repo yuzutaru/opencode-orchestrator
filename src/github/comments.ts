@@ -255,3 +255,66 @@ ${attemptsList}
 ---
 _Please provide guidance or manually fix the issues._`;
 }
+
+/**
+ * Template for model-limit failure comment
+ *
+ * Posted when an OpenCode mission dies because of a provider model limit:
+ * rate limit, quota exhaustion, or context window overflow.
+ */
+export function modelLimitComment(
+    kind: 'rate-limit' | 'quota' | 'context-length' | 'model-unavailable',
+    title: string,
+    errors: Array<{ type: string; message: string }>,
+    model: string,
+    elapsedMinutes: string,
+    costUsd: number,
+    sessionId?: string
+): string {
+    const kindLabel = {
+        'rate-limit': 'rate limit',
+        quota: 'quota',
+        'context-length': 'context window',
+        'model-unavailable': 'model unavailable',
+    }[kind];
+
+    const details = errors.map((e) => `[${e.type}] ${String(e.message).replace(/`/g, '\\`')}`).join('\n');
+
+    const emoji = {
+        'rate-limit': '⏳',
+        quota: '💳',
+        'context-length': '📏',
+        'model-unavailable': '🚫',
+    }[kind];
+
+    const sessionLine = sessionId
+        ? `\n\n### Session ID\n${sessionId}\nThe mission can be resumed from this session if you reply below.`
+        : '';
+
+    return `## ${emoji} Model limit hit: ${title}
+
+The OpenCode mission for this issue stopped because the provider hit the model **${kindLabel}**.
+
+### Error details
+
+\`\`\`
+${details}
+\`\`\`
+
+### Model
+\`${model}\`
+
+### Session stats
+- Elapsed: ${elapsedMinutes} minutes
+- Cost: $${costUsd.toFixed(4)}${sessionLine}
+
+### What you can do
+
+1. **Wait for the limit to reset** (rate limits / quotas usually reset within minutes to hours),
+   then reply to this comment and the agent will resume from the saved session.
+2. **Raise your provider quota** or add credits if the account is exhausted.
+3. **Switch models** by changing \`OPENCODE_MODEL\` in the orchestrator config and re-adding \`ai-task\`.
+
+---
+_The \`ai-blocked\` label has been added. Reply here to continue, or remove \`ai-task\` to cancel._`;
+}

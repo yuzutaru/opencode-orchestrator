@@ -18,7 +18,7 @@ export interface QualityGate {
     cwd: string;
     timeoutMinutes: number;
     /** Extra environment for the child process (gate scripts read these). */
-    env?: Record<string, string>;
+    env?: Record<string, string | undefined>;
     /** Report directory/bundle, relative to the worktree root, useful on failure. */
     reportPath?: string;
 }
@@ -38,7 +38,7 @@ export interface QualityResult {
 }
 
 /**
- * Levela quality gates.
+ * Per-platform quality gates.
  *
  * Selection is change-based: an issue that only touches `android/` never pays for
  * iOS verification. Each touched platform runs its unit gate first (cheap, fails
@@ -76,8 +76,10 @@ export class QualityGateRunner {
                     cwd: '.',
                     timeoutMinutes: quality.uiTimeoutMinutes,
                     env: {
-                        LEVELA_AVD: quality.avd,
-                        LEVELA_MIN_FREE_GB: String(quality.minFreeGb),
+                        ANDROID_AVD: quality.avd,
+                        ANDROID_EMULATOR_PORT: String(quality.androidEmulatorPort),
+                        ANDROID_BOOT_TIMEOUT_SECONDS: String(quality.androidBootTimeoutSeconds),
+                        QUALITY_MIN_FREE_GB: String(quality.minFreeGb),
                     },
                     reportPath: 'android/app/build/reports/androidTests',
                 });
@@ -93,8 +95,11 @@ export class QualityGateRunner {
                 cwd: '.',
                 timeoutMinutes: quality.timeoutMinutes,
                 env: {
-                    LEVELA_IOS_DEVICE: quality.iosDevice,
-                    LEVELA_MIN_FREE_GB: String(quality.minFreeGb),
+                    IOS_DEVICE: quality.iosDevice,
+                    IOS_XCODE_PROJECT: quality.iosXcodeProject,
+                    IOS_XCODE_SCHEME: quality.iosXcodeScheme,
+                    IOS_UI_TEST_TARGET: quality.iosUiTestTarget,
+                    QUALITY_MIN_FREE_GB: String(quality.minFreeGb),
                 },
             });
 
@@ -107,8 +112,11 @@ export class QualityGateRunner {
                     cwd: '.',
                     timeoutMinutes: quality.uiTimeoutMinutes,
                     env: {
-                        LEVELA_IOS_DEVICE: quality.iosDevice,
-                        LEVELA_MIN_FREE_GB: String(quality.minFreeGb),
+                        IOS_DEVICE: quality.iosDevice,
+                        IOS_XCODE_PROJECT: quality.iosXcodeProject,
+                        IOS_XCODE_SCHEME: quality.iosXcodeScheme,
+                        IOS_UI_TEST_TARGET: quality.iosUiTestTarget,
+                        QUALITY_MIN_FREE_GB: String(quality.minFreeGb),
                     },
                     reportPath: 'ios/.build/results/ui.xcresult',
                 });

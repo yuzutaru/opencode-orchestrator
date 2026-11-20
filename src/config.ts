@@ -41,7 +41,7 @@ const configSchema = z.object({
         agent: z.string().default('build'),
         model: z.string().optional(),
         projectPath: z.string().min(1, 'PROJECT_PATH is required'),
-        worktreeDir: z.string().default('../levela-worktrees'),
+        worktreeDir: z.string().default('.worktrees'),
         taskTimeoutMinutes: z.number().min(5).max(300).default(90),
     }),
 
@@ -62,8 +62,18 @@ const configSchema = z.object({
         minFreeGb: z.number().min(0).max(500).default(10),
         /** AVD name used by the Android instrumented gate. */
         avd: z.string().default('Pixel_10a'),
+        /** Console port for an Android emulator the gate boots. */
+        androidEmulatorPort: z.number().min(1024).max(65535).default(5556),
+        /** Boot timeout (seconds) for an Android emulator the gate boots. */
+        androidBootTimeoutSeconds: z.number().min(1).max(3600).default(240),
         /** Simulator device name used by the iOS gates. */
         iosDevice: z.string().default('iPhone 18 Pro'),
+        /** Xcode project under ios/ (defaults to the single *.xcodeproj). */
+        iosXcodeProject: z.string().optional(),
+        /** Xcode scheme to build/test (defaults to the project basename). */
+        iosXcodeScheme: z.string().optional(),
+        /** UI test target for the iOS UI gate (defaults to <scheme>UITests). */
+        iosUiTestTarget: z.string().optional(),
         /** Directory holding the gate lifecycle scripts (outside the tested repo). */
         gateScriptsDir: z.string().default(path.join(orchestratorRoot, 'scripts', 'gates')),
     }),
@@ -126,7 +136,7 @@ export function loadConfig(): Config {
             agent: process.env.OPENCODE_AGENT || 'build',
             model: process.env.OPENCODE_MODEL || undefined,
             projectPath: process.env.PROJECT_PATH || '',
-            worktreeDir: process.env.WORKTREE_DIR || '../levela-worktrees',
+            worktreeDir: process.env.WORKTREE_DIR || '.worktrees',
             taskTimeoutMinutes: parseNumber(process.env.TASK_TIMEOUT_MINUTES, 90),
         },
         quality: {
@@ -137,8 +147,13 @@ export function loadConfig(): Config {
             androidUiTests: parseBoolean(process.env.QUALITY_ANDROID_UI_TESTS, true),
             iosUiTests: parseBoolean(process.env.QUALITY_IOS_UI_TESTS, true),
             minFreeGb: parseNumber(process.env.QUALITY_MIN_FREE_GB, 10),
-            avd: process.env.LEVELA_AVD || 'Pixel_10a',
-            iosDevice: process.env.LEVELA_IOS_DEVICE || 'iPhone 18 Pro',
+            avd: process.env.ANDROID_AVD || 'Pixel_10a',
+            androidEmulatorPort: parseNumber(process.env.ANDROID_EMULATOR_PORT, 5556),
+            androidBootTimeoutSeconds: parseNumber(process.env.ANDROID_BOOT_TIMEOUT_SECONDS, 240),
+            iosDevice: process.env.IOS_DEVICE || 'iPhone 18 Pro',
+            iosXcodeProject: process.env.IOS_XCODE_PROJECT,
+            iosXcodeScheme: process.env.IOS_XCODE_SCHEME,
+            iosUiTestTarget: process.env.IOS_UI_TEST_TARGET,
             gateScriptsDir: process.env.QUALITY_GATE_SCRIPTS_DIR || path.join(orchestratorRoot, 'scripts', 'gates'),
         },
         taskState: {
@@ -178,7 +193,7 @@ export function getRepoInfo(config: Config): { owner: string; repo: string } {
 /**
  * Directory holding every issue worktree.
  *
- * `WORKTREE_DIR` may be relative to PROJECT_PATH (`../levela-worktrees`) or absolute.
+ * `WORKTREE_DIR` may be relative to PROJECT_PATH (`.worktrees`) or absolute.
  */
 export function getWorktreeBase(config: Config): string {
     return path.isAbsolute(config.opencode.worktreeDir)
