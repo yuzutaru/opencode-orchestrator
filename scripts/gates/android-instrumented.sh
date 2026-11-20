@@ -9,9 +9,10 @@
 # the device down again. A device this script did not start is never killed.
 #
 # Knobs (exported by the orchestrator via QualityGate.env):
-#   LEVELA_AVD            AVD name (default: Pixel_10a)
-#   LEVELA_EMULATOR_PORT  console port for a device we boot (default: 5556)
-#   LEVELA_MIN_FREE_GB    free-space preflight (default: 10)
+#   ANDROID_AVD           AVD name (default: Pixel_10a)
+#   ANDROID_EMULATOR_PORT console port for a device we boot (default: 5556)
+#   QUALITY_MIN_FREE_GB   free-space preflight (default: 10)
+#   ANDROID_BOOT_TIMEOUT_SECONDS boot timeout for a booted emulator (default: 240)
 
 set -euo pipefail
 
@@ -20,10 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 WORKTREE="${1:-$(pwd)}"
-AVD="${LEVELA_AVD:-Pixel_10a}"
-EMULATOR_PORT="${LEVELA_EMULATOR_PORT:-5556}"
-MIN_FREE_GB="${LEVELA_MIN_FREE_GB:-10}"
-BOOT_TIMEOUT_SECONDS="${LEVELA_BOOT_TIMEOUT_SECONDS:-240}"
+AVD="${ANDROID_AVD:-Pixel_10a}"
+EMULATOR_PORT="${ANDROID_EMULATOR_PORT:-5556}"
+MIN_FREE_GB="${QUALITY_MIN_FREE_GB:-10}"
+BOOT_TIMEOUT_SECONDS="${ANDROID_BOOT_TIMEOUT_SECONDS:-240}"
 
 cd "$WORKTREE/android"
 

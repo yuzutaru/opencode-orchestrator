@@ -98,6 +98,7 @@ gh issue comment ${issueNumber} --body "## Plan for issue #${issueNumber} (revis
  * Verification and finish-line instructions for a given phase.
  */
 function finishSection(config: Config, worktreePath: string, phase: PlanPhase): string {
+    const iosScheme = config.quality.iosXcodeScheme || '<ios scheme>';
     if (phase === 'plan') {
         return `## Plan phase — do not write code
 
@@ -119,7 +120,7 @@ cd android && ./gradlew assembleDebug testDebugUnitTest --console=plain
 iOS:
 
 \`\`\`bash
-cd ios && xcodebuild -scheme Levela -destination 'generic/platform=iOS Simulator' build
+cd ios && xcodebuild -scheme ${iosScheme} -destination 'generic/platform=iOS Simulator' build
 \`\`\`
 
 Shared contracts (only if you touched \`assets/\`):

@@ -4,17 +4,20 @@
 #
 # Usage: ios-tests.sh <unit|ui> [worktree]
 #
-#   unit -> app scheme `test` without LevelaUITests, plus the Today and Nutrition
+#   unit -> app scheme `test` minus the UI test target, plus the Today and Nutrition
 #           package schemes (their tests only exist there).
-#   ui   -> app scheme `test` limited to LevelaUITests, parallel testing disabled.
+#   ui   -> app scheme `test` limited to the UI test target, parallel testing disabled.
 #
 # The simulator is booted only when it is shut down, and is shut down again only
 # if this script started it. A device that was already booted (a human's session)
 # is reused and left running.
 #
 # Knobs (exported by the orchestrator via QualityGate.env):
-#   LEVELA_IOS_DEVICE    simulator name (default: iPhone 18 Pro)
-#   LEVELA_MIN_FREE_GB   free-space preflight (default: 10)
+#   IOS_DEVICE          simulator name (default: iPhone 18 Pro)
+#   IOS_XCODE_PROJECT   xcodeproj to test (default: single ios/*.xcodeproj)
+#   IOS_XCODE_SCHEME    scheme to build/test (default: project basename)
+#   IOS_UI_TEST_TARGET  UI test target for the UI gate (default: ${SCHEME}UITests)
+#   QUALITY_MIN_FREE_GB free-space preflight (default: 10)
 
 set -euo pipefail
 
@@ -29,8 +32,8 @@ if [[ "$MODE" != "unit" && "$MODE" != "ui" ]]; then
 fi
 
 WORKTREE="${2:-$(pwd)}"
-DEVICE_NAME="${LEVELA_IOS_DEVICE:-iPhone 18 Pro}"
-MIN_FREE_GB="${LEVELA_MIN_FREE_GB:-10}"
+DEVICE_NAME="${IOS_DEVICE:-iPhone 18 Pro}"
+MIN_FREE_GB="${QUALITY_MIN_FREE_GB:-10}"
 
 cd "$WORKTREE/ios"
 
@@ -43,7 +46,7 @@ UDID="$(xcrun simctl list devices available \
     | sed -E 's/.*\(([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\).*/\1/')"
 
 if [[ -z "$UDID" || "$UDID" == "$DEVICE_NAME" ]]; then
-    gate_error "no available simulator named '${DEVICE_NAME}' (set LEVELA_IOS_DEVICE)"
+    gate_error "no available simulator named '${DEVICE_NAME}' (set IOS_DEVICE)"
     exit 1
 fi
 
@@ -72,11 +75,42 @@ DERIVED_DATA="$WORKTREE/ios/.build/dd"
 RESULTS_DIR="$WORKTREE/ios/.build/results"
 mkdir -p "$DERIVED_DATA" "$RESULTS_DIR"
 
+# --- Resolve the xcode project / scheme / UI test target ---------------------
+PROJECT="${IOS_XCODE_PROJECT:-}"
+if [[ -z "$PROJECT" ]]; then
+    shopt -s nullglob
+    projs=(*.xcodeproj)
+    shopt -u nullglob
+    if [[ ${#projs[@]} -eq 0 ]]; then
+        gate_error "no *.xcodeproj found in ios/ (set IOS_XCODE_PROJECT)"
+        exit 2
+    elif [[ ${#projs[@]} -gt 1 ]]; then
+        gate_error "multiple *.xcodeproj found in ios/ (set IOS_XCODE_PROJECT explicitly)"
+        exit 2
+    fi
+    PROJECT="${projs[0]##*/}"
+fi
+
+SCHEME="${IOS_XCODE_SCHEME:-}"
+if [[ -z "$SCHEME" ]]; then
+    SCHEME="${PROJECT%.xcodeproj}"
+fi
+
+# UI test target: explicit override, else ${SCHEME}UITests if present in the project.
+UI_TARGET="${IOS_UI_TEST_TARGET:-}"
+if [[ -z "$UI_TARGET" ]]; then
+    UI_TARGET="${SCHEME}UITests"
+    if ! grep -qE "name = ${UI_TARGET};" "$WORKTREE/ios/$PROJECT/project.pbxproj"; then
+        gate_error "no native target '${UI_TARGET}' in '$PROJECT' (set IOS_UI_TEST_TARGET)"
+        exit 2
+    fi
+fi
+
 # -onlyUsePackageVersionsFromResolvedFile prevents SPM from rewriting
 # Package.resolved mid-gate (tracked file drift would invalidate the commit).
 COMMON_ARGS=(
-    -project Levela.xcodeproj
-    -scheme Levela
+    -project "$PROJECT"
+    -scheme "$SCHEME"
     -destination "id=$UDID"
     -derivedDataPath "$DERIVED_DATA"
     -onlyUsePackageVersionsFromResolvedFile
@@ -114,9 +148,9 @@ if [[ "$MODE" == "unit" ]]; then
     result_bundle="$RESULTS_DIR/unit.xcresult"
     rm -rf "$result_bundle"
 
-    gate_section "app scheme unit tests (LevelaTests + hosted mirrors)"
+    gate_section "app scheme unit tests (unit tests + hosted mirrors)"
     run_app_scheme_tests "$result_bundle" \
-        -skip-testing:LevelaUITests \
+        -skip-testing:"$UI_TARGET" \
         -resultBundlePath "$result_bundle" \
         || status=$?
 
@@ -142,9 +176,9 @@ else
     result_bundle="$RESULTS_DIR/ui.xcresult"
     rm -rf "$result_bundle"
 
-    gate_section "LevelaUITests (parallel testing disabled)"
+    gate_section "${UI_TARGET} (parallel testing disabled)"
     run_app_scheme_tests "$result_bundle" \
-        -only-testing:LevelaUITests \
+        -only-testing:"$UI_TARGET" \
         -parallel-testing-enabled NO \
         -resultBundlePath "$result_bundle" \
         || status=$?
