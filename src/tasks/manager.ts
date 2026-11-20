@@ -9,8 +9,10 @@ import { OpenCodeManager, RunResult } from './opencode.js';
 import { QualityGateRunner, QualityResult } from './quality.js';
 import { DeliveryManager } from './delivery.js';
 import { Labels, isPlanPending } from '../github/labels.js';
+import { modelLimitComment } from '../github/comments.js';
 import { createLogger } from '../utils/logger.js';
 import { createBranchSlug } from '../utils/slug.js';
+import { classifyRunErrors, failureKindLabel } from '../utils/errors.js';
 
 const logger = createLogger('task-manager');
 const execAsync = promisify(execCb);
@@ -248,9 +250,30 @@ export class TaskManager {
             return;
         }
 
+        if (result.exitCode !== 0 && result.errors.length > 0) {
+            const kind = classifyRunErrors(result.errors);
+            if (kind !== 'other') {
+                const minutes = (result.durationMs / 60_000).toFixed(1);
+                await this.block(issue, modelLimitComment(
+                    kind,
+                    failureKindLabel(kind),
+                    result.errors,
+                    this.config.opencode.model ?? '(agent default)',
+                    minutes,
+                    result.costUsd,
+                    result.sessionId,
+                ));
+                return;
+            }
+        }
+
         if (result.exitCode !== 0) {
             const stderr = result.stderr.trim().slice(-2000);
-            await this.block(issue, `OpenCode exited with code ${result.exitCode}.`, stderr ? `\n\n\`\`\`\n${stderr}\n\`\`\`` : '');
+            const errorDetails = result.errors
+                .map((e) => `[${e.type}] ${e.message}`)
+                .join('\n');
+            const parts = [stderr, errorDetails].filter(Boolean).join('\n\n');
+            await this.block(issue, `OpenCode exited with code ${result.exitCode}.`, parts ? `\n\n\`\`\`\n${parts}\n\`\`\`` : '');
             return;
         }
 

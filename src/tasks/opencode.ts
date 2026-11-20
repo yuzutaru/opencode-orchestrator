@@ -33,6 +33,7 @@ export interface RunResult {
     timedOut: boolean;
     killed: boolean;
     stderr: string;
+    errors: Array<{ type: string; message: string }>;
 }
 
 export type TaskCompleteHandler = (result: RunResult) => void | Promise<void>;
@@ -209,6 +210,7 @@ export class OpenCodeManager {
                 timedOut: false,
                 killed: false,
                 stderr: '',
+                errors: [],
             },
         };
 
@@ -287,6 +289,13 @@ export class OpenCodeManager {
             }
             case 'error': {
                 logger.error({ issueNumber: task.issueNumber, event }, 'OpenCode error event');
+                const error = event.error ?? {};
+                const type = typeof error.type === 'string' ? error.type : 'provider';
+                const message = typeof error.message === 'string' ? error.message : String(error);
+                task.result.errors.push({ type, message: message.slice(0, 500) });
+                if (task.result.errors.length > 5) {
+                    task.result.errors.shift();
+                }
                 break;
             }
             default:
