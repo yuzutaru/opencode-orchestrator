@@ -5,6 +5,7 @@ import { GitHubClient } from './github/client.js';
 import { Labels, isReadyForPickup } from './github/labels.js';
 import { TaskManager } from './tasks/manager.js';
 import { WorktreeManager } from './tasks/worktree.js';
+import { VisualManager } from './visual/index.js';
 import { createLogger } from './utils/logger.js';
 
 const logger = createLogger('orchestrator');
@@ -18,6 +19,7 @@ class GitHubTaskOrchestrator {
     private github: GitHubClient;
     private taskManager: TaskManager;
     private worktrees: WorktreeManager;
+    private visual: VisualManager;
     private isShuttingDown = false;
 
     constructor() {
@@ -25,6 +27,7 @@ class GitHubTaskOrchestrator {
         this.github = new GitHubClient(this.config);
         this.taskManager = new TaskManager(this.config);
         this.worktrees = new WorktreeManager(this.config);
+        this.visual = new VisualManager(this.config);
     }
 
     async start(): Promise<void> {
@@ -54,6 +57,10 @@ class GitHubTaskOrchestrator {
         }, 'Configuration loaded');
 
         this.setupShutdownHandlers();
+
+        // Initialize the (fail-safe, agent-agnostic) visual office integration.
+        // If Pixel Agents is not running, the orchestrator continues normally.
+        this.visual.init();
 
         logger.info('Running initial poll...');
         await this.poll();

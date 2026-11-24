@@ -97,6 +97,14 @@ const configSchema = z.object({
     logging: z.object({
         level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     }),
+
+    // Visual Office Integration (Pixel Agents) — agent-agnostic, fail-safe.
+    visual: z.object({
+        /** Enable the Pixel Agents visual office integration. */
+        pixelAgentsEnabled: z.boolean().default(true),
+        /** Optional explicit Pixel Agents server URL (e.g. http://localhost:3000). */
+        pixelAgentsUrl: z.string().optional(),
+    }),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -167,6 +175,10 @@ export function loadConfig(): Config {
         },
         logging: {
             level: (process.env.LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') || 'info',
+        },
+        visual: {
+            pixelAgentsEnabled: parseBoolean(process.env.ENABLE_PIXEL_AGENTS, true),
+            pixelAgentsUrl: process.env.PIXEL_AGENTS_URL || undefined,
         },
     };
 
