@@ -9,6 +9,7 @@ export type PixelAgentHookName =
 export interface PixelAgentHookPayload {
     hook_event_name: PixelAgentHookName;
     session_id: string;
+    model?: string;
     tool_name?: string;
     tool_input?: unknown;
     cwd?: string;
