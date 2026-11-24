@@ -9,7 +9,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-BOT_USER="${BOT_USER:-quintonflyn}"
+# Bot login for `gh auth token --user`. Reads only GITHUB_USERNAME from .env so
+# secrets are never sourced into this script.
+if [[ -z "${BOT_USER:-}" ]]; then
+    BOT_USER="$(grep -E '^GITHUB_USERNAME=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
+fi
+if [[ -z "${BOT_USER:-}" ]]; then
+    echo "error: set BOT_USER or GITHUB_USERNAME in .env" >&2
+    exit 1
+fi
 
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     GITHUB_TOKEN="$(gh auth token --user "$BOT_USER")"
