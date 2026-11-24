@@ -10,6 +10,7 @@
         "build": "tsc",
         "debug": "tsx scripts/debug-opencode.ts",
         "test:event-stream": "tsx scripts/test-event-stream.ts",
+        "test:visual": "tsx scripts/test-visual-events.ts",
         "start": "node dist/index.js",
         "start:config": "dotenv -e $CONFIG_DIR/.env -- node dist/index.js",
         "lint": "eslint src --ext .ts",

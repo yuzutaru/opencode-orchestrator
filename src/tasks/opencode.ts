@@ -5,6 +5,8 @@ import { Config } from '../config.js';
 import { Issue } from '../github/client.js';
 import { createLogger } from '../utils/logger.js';
 import { botGitEnv } from '../utils/git.js';
+import { visualEventBus } from '../events/bus.js';
+import { categorizeTool } from '../events/types.js';
 import {
     generateOrchestratorPrompt,
     generatePlanPrompt,
@@ -40,6 +42,7 @@ export type TaskCompleteHandler = (result: RunResult) => void | Promise<void>;
 
 interface RunningTask {
     issueNumber: number;
+    issueTitle?: string;
     child: ChildProcessByStdio<null, Readable, Readable>;
     startedAt: number;
     timer?: NodeJS.Timeout;
@@ -215,6 +218,7 @@ export class OpenCodeManager {
         };
 
         this.tasks.set(issueNumber, task);
+        task.issueTitle = title;
 
         const timeoutMs = this.config.opencode.taskTimeoutMinutes * 60 * 1000;
         task.timer = setTimeout(() => {
@@ -268,6 +272,13 @@ export class OpenCodeManager {
                 if (typeof text === 'string' && text.length > 0) {
                     task.result.lastText = text;
                     logger.debug({ issueNumber: task.issueNumber, text }, 'Assistant text');
+                    visualEventBus.emitAgentSpeech({
+                        type: 'agent:text',
+                        issueNumber: task.issueNumber,
+                        sessionId: task.result.sessionId,
+                        text,
+                        timestamp: Date.now(),
+                    });
                 }
                 break;
             }
@@ -277,6 +288,16 @@ export class OpenCodeManager {
                 const detail = part.state?.title ?? part.state?.input?.path ?? part.state?.input?.command ?? '';
                 const summary = typeof detail === 'string' ? detail.replace(/\s+/g, ' ').slice(0, 120) : '';
                 console.log(`${DIM}#${task.issueNumber}${RESET} ${CYAN}${tool}${RESET} ${DIM}${summary}${RESET}`);
+                visualEventBus.emitAgentAction({
+                    type: 'agent:tool_use',
+                    issueNumber: task.issueNumber,
+                    sessionId: task.result.sessionId,
+                    tool,
+                    category: categorizeTool(tool),
+                    summary,
+                    input: part,
+                    timestamp: Date.now(),
+                });
                 break;
             }
             case 'step_finish': {
@@ -308,6 +329,23 @@ export class OpenCodeManager {
 
         task.result.exitCode = code;
         task.result.durationMs = Date.now() - task.startedAt;
+
+        const succeeded = code === 0 && !task.result.timedOut && !task.result.killed;
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: task.issueNumber,
+            issueTitle: task.issueTitle ?? '',
+            sessionId: task.result.sessionId,
+            phase: succeeded ? 'completed' : 'failed',
+            details: task.result.timedOut
+                ? 'mission timed out'
+                : task.result.killed
+                    ? 'mission killed'
+                    : task.result.errors.length > 0
+                        ? 'mission failed with errors'
+                        : undefined,
+            timestamp: Date.now(),
+        });
 
         this.tasks.delete(task.issueNumber);
 

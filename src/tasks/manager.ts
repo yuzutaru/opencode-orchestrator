@@ -13,21 +13,13 @@ import { modelLimitComment } from '../github/comments.js';
 import { createLogger } from '../utils/logger.js';
 import { createBranchSlug } from '../utils/slug.js';
 import { classifyRunErrors, failureKindLabel } from '../utils/errors.js';
+import { visualEventBus } from '../events/bus.js';
+import { TaskLifecycleEvent, TaskPhase } from '../events/types.js';
 
 const logger = createLogger('task-manager');
 const execAsync = promisify(execCb);
 
 const STATE_FILE = path.join(process.cwd(), '.state', 'sessions.json');
-
-export type TaskPhase =
-    | 'starting'
-    | 'planning'
-    | 'working'
-    | 'blocked'
-    | 'verifying'
-    | 'delivering'
-    | 'review-ready'
-    | 'failed';
 
 export interface TaskContext {
     issueNumber: number;
@@ -85,15 +77,39 @@ export class TaskManager {
 
         this.activeTasks.set(issue.number, context);
 
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            branchName,
+            worktreePath,
+            sessionId: undefined,
+            phase: 'starting',
+            timestamp: context.startedAt.getTime(),
+        });
+
         try {
+            let sessionId: string | undefined;
             if (this.config.planning.requirePlanApproval) {
-                await this.opencode.startPlan(issue, worktreePath, branchName);
+                sessionId = await this.opencode.startPlan(issue, worktreePath, branchName);
                 context.phase = 'planning';
                 logger.info({ issueNumber: issue.number }, 'Plan mission started; awaiting human approval');
             } else {
-                await this.opencode.startTask(issue, worktreePath, branchName);
+                sessionId = await this.opencode.startTask(issue, worktreePath, branchName);
                 context.phase = 'working';
             }
+            context.sessionId = sessionId;
+
+            visualEventBus.emitTaskLifecycle({
+                type: 'task:lifecycle',
+                issueNumber: issue.number,
+                issueTitle: issue.title,
+                branchName,
+                worktreePath,
+                sessionId,
+                phase: context.phase,
+                timestamp: Date.now(),
+            });
         } catch (error: any) {
             this.activeTasks.delete(issue.number);
             await this.block(issue, `Could not start the OpenCode mission: ${error.message}`);
@@ -147,6 +163,17 @@ export class TaskManager {
         };
 
         this.activeTasks.set(issue.number, context);
+
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            branchName,
+            worktreePath,
+            sessionId: context.sessionId,
+            phase: context.phase,
+            timestamp: context.startedAt.getTime(),
+        });
 
         try {
             const sessionId = this.getSession(issue.number);
@@ -233,12 +260,34 @@ export class TaskManager {
         }
 
         if (issue.labels.includes(Labels.AI_BLOCKED)) {
+            visualEventBus.emitTaskLifecycle({
+                type: 'task:lifecycle',
+                issueNumber: issue.number,
+                issueTitle: issue.title,
+                branchName: context.branchName,
+                worktreePath: context.worktreePath,
+                sessionId: context.sessionId,
+                phase: 'blocked',
+                details: 'Agent asked for clarification; waiting for a human',
+                timestamp: Date.now(),
+            });
             logger.info({ issueNumber: issue.number }, 'Agent asked for clarification; waiting for a human');
             this.blockedSince.set(issue.number, new Date());
             return;
         }
 
         if (issue.labels.includes(Labels.AI_PLAN_PENDING)) {
+            visualEventBus.emitTaskLifecycle({
+                type: 'task:lifecycle',
+                issueNumber: issue.number,
+                issueTitle: issue.title,
+                branchName: context.branchName,
+                worktreePath: context.worktreePath,
+                sessionId: context.sessionId,
+                phase: 'blocked',
+                details: 'Plan mission complete; awaiting human approval',
+                timestamp: Date.now(),
+            });
             logger.info({ issueNumber: issue.number }, 'Plan mission complete; awaiting human approval');
             await this.discardPlanChanges(context.worktreePath);
             this.blockedSince.set(issue.number, new Date());
@@ -291,6 +340,17 @@ export class TaskManager {
         }
 
         context.phase = 'verifying';
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            branchName: context.branchName,
+            worktreePath: context.worktreePath,
+            sessionId: context.sessionId,
+            phase: 'verifying',
+            details: 'Running quality gates',
+            timestamp: Date.now(),
+        });
         const gateResults = await this.runGates(context.worktreePath, changedFiles);
 
         if (this.config.quality.enforceGates && !this.quality.allPassed(gateResults)) {
@@ -315,6 +375,17 @@ export class TaskManager {
         }
 
         context.phase = 'delivering';
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            branchName: context.branchName,
+            worktreePath: context.worktreePath,
+            sessionId: context.sessionId,
+            phase: 'delivering',
+            details: 'Creating pull request',
+            timestamp: Date.now(),
+        });
         const delivery = await this.delivery.deliver(
             issue,
             context.worktreePath,
@@ -331,6 +402,18 @@ export class TaskManager {
 
         context.phase = 'review-ready';
         this.blockedSince.delete(issue.number);
+
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            branchName: context.branchName,
+            worktreePath: context.worktreePath,
+            sessionId: context.sessionId,
+            phase: 'completed',
+            details: 'Pull request ready for review',
+            timestamp: Date.now(),
+        });
 
         await this.github.removeLabel(issue.number, Labels.AI_TASK);
         await this.github.removeLabel(issue.number, Labels.AI_IN_PROGRESS);
@@ -363,6 +446,15 @@ Merging is manual: ask for changes on the PR, or reply here to have the agent co
      * Mark the issue blocked and explain why.
      */
     private async block(issue: Issue, reason: string, details: string = ''): Promise<void> {
+        visualEventBus.emitTaskLifecycle({
+            type: 'task:lifecycle',
+            issueNumber: issue.number,
+            issueTitle: issue.title,
+            phase: 'blocked',
+            details: reason,
+            timestamp: Date.now(),
+        });
+
         logger.warn({ issueNumber: issue.number, reason }, 'Blocking issue');
 
         await this.github.removeLabel(issue.number, Labels.AI_IN_PROGRESS).catch(() => undefined);
