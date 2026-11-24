@@ -23,13 +23,13 @@ Added: `src/tasks/delivery.ts`, `src/utils/git.ts`, `run.sh`, `.env`, this file.
 
 | Role | Account | How |
 | --- | --- | --- |
-| Bot (commits, comments, PRs) | `quintonflyn` | `GH_TOKEN` pinned by `run.sh`, git push rewritten to HTTPS + token |
-| Reviewer | `yuzutaru` | approve/review in the browser or `gh` after `gh auth switch` |
+| Bot (commits, comments, PRs) | bot login (`GITHUB_USERNAME` in `.env`) | `GH_TOKEN` pinned by `run.sh`, git push rewritten to HTTPS + token |
+| Reviewer | reviewer (your own login) | approve/review in the browser or `gh` after `gh auth switch` |
 
-`GITHUB_USERNAME=quintonflyn` in `.env` is the **bot** identity: comments from any
-other login are treated as human replies (`src/github/client.ts`). Setting it to
-`yuzutaru` would make the agent's own comments count as answers and auto-resume
-blocked issues.
+`GITHUB_USERNAME` in `.env` is the **bot** identity: comments from any other
+login are treated as human replies (`src/github/client.ts`). Setting it to the
+reviewer's own login would make the agent's own comments count as answers and
+auto-resume blocked issues.
 
 `run.sh` refuses to start if the token does not belong to the bot.
 
@@ -41,7 +41,8 @@ npm run build
 ./run.sh                 # foreground
 ```
 
-Token source: `run.sh` calls `gh auth token --user quintonflyn` unless
+Token source: `run.sh` reads `GITHUB_USERNAME` from `.env` and calls
+`gh auth token --user <bot login>` unless
 `GITHUB_TOKEN` is already exported. To use a scoped PAT instead, paste it into
 `.env` and export it (`GITHUB_TOKEN=... ./run.sh`) or replace the lookup in
 `run.sh`.
@@ -60,9 +61,9 @@ pm2 save && pm2 startup
 2. Next poll (5 min) creates `.worktrees/issue-N` on `ai/issue-N-<slug>`.
 3. The agent works, posts progress comments, keeps labels in sync.
 4. On exit: `ai-blocked`? stop. Otherwise the orchestrator stages, runs gates,
-   commits (`fix(android): …`), pushes as `quintonflyn`, opens a **draft** PR,
+   commits (`fix(android): …`), pushes as the bot login, opens a **draft** PR,
    swaps to `ai-review-ready`.
-5. You review as `yuzutaru` and merge. The bot never merges or approves.
+5. You review as the reviewer and merge. The bot never merges or approves.
 
 Blocked: the agent adds `ai-blocked` and asks. Your reply is the trigger — the
 orchestrator resumes the same session (`--session <id>`, stored in

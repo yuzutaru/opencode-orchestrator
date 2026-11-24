@@ -17,9 +17,10 @@ const orchestratorRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url
  * Configuration schema with validation
  *
  * Identity model:
- *   github.username  = the bot account (quintonflyn). Comments from this login are
- *                      treated as machine output, everything else is a human reply.
- *   The reviewer (yuzutaru) approves the pull requests the orchestrator opens.
+ *   github.username  = the bot login (from `GITHUB_USERNAME`). Comments from this
+ *                      login are treated as machine output; everything else is a
+ *                      human reply.
+ *   The reviewer approves the pull requests the orchestrator opens.
  */
 const configSchema = z.object({
     // GitHub
