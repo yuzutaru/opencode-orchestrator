@@ -42,7 +42,11 @@ export class VisualManager {
         if (!this.pixelAgentsClient) return;
 
         try {
-            const hookPayload = mapVisualEventToPixelHook(event);
+            // Resolve the model driving this task: explicit config override,
+            // otherwise fall back to the default model for the active agent.
+            const model = this.config.opencode.model ?? resolveAgentDefaultModel(this.config.opencode.agent);
+
+            const hookPayload = mapVisualEventToPixelHook(event, model);
             if (hookPayload) {
                 await this.pixelAgentsClient.dispatch(hookPayload);
             }
@@ -50,4 +54,19 @@ export class VisualManager {
             logger.debug({ error }, 'Failed to dispatch visual hook');
         }
     }
+}
+
+/**
+ * Fallback model for each agent type when `opencode.model` is not set.
+ * Mirrors the per-agent model defaults declared in opencode.json.
+ */
+function resolveAgentDefaultModel(agent: string): string | undefined {
+    const defaults: Record<string, string> = {
+        build: 'opencode/nemotron-3.5-super-vl-free',
+        plan: 'opencode/mimo-v2.6-flash-free',
+        ask: 'opencode/nemotron-3.5-lightning-free',
+        title: 'deepseek/deepseek-flash',
+        summary: 'deepseek/deepseek-flash',
+    };
+    return defaults[agent] ?? undefined;
 }

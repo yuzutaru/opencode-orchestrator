@@ -7,20 +7,21 @@ import {
 } from '../../events/types.js';
 import { PixelAgentHookPayload } from './types.js';
 
-export function mapVisualEventToPixelHook(event: VisualEvent): PixelAgentHookPayload | null {
+export function mapVisualEventToPixelHook(event: VisualEvent, model?: string): PixelAgentHookPayload | null {
     const sessionId = event.sessionId || `issue-${event.issueNumber}`;
 
     switch (event.type) {
         case 'task:lifecycle':
-            return mapLifecycleEvent(event, sessionId);
+            return mapLifecycleEvent(event, sessionId, model);
 
         case 'agent:tool_use':
-            return mapToolUseEvent(event, sessionId);
+            return mapToolUseEvent(event, sessionId, model);
 
         case 'agent:text':
             return {
                 hook_event_name: 'Notification',
                 session_id: sessionId,
+                model,
                 message: event.text.slice(0, 150),
                 issue_number: event.issueNumber,
                 timestamp: event.timestamp,
@@ -31,12 +32,13 @@ export function mapVisualEventToPixelHook(event: VisualEvent): PixelAgentHookPay
     }
 }
 
-function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelAgentHookPayload {
+function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string, model?: string): PixelAgentHookPayload {
     switch (event.phase) {
         case 'starting':
             return {
                 hook_event_name: 'SessionStart',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 title: event.issueTitle,
                 cwd: event.worktreePath,
@@ -48,6 +50,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'Notification',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: `Planning implementation for #${event.issueNumber}`,
                 timestamp: event.timestamp,
@@ -57,6 +60,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'PreToolUse',
                 session_id: sessionId,
+                model,
                 tool_name: 'Edit',
                 tool_input: { branch: event.branchName },
                 issue_number: event.issueNumber,
@@ -68,6 +72,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'PermissionRequest',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: event.details || `Waiting for user review/approval on #${event.issueNumber}`,
                 timestamp: event.timestamp,
@@ -77,6 +82,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'PreToolUse',
                 session_id: sessionId,
+                model,
                 tool_name: 'Bash',
                 tool_input: { command: 'Quality Gate Verification' },
                 issue_number: event.issueNumber,
@@ -88,6 +94,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'Notification',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: `Delivering pull request for #${event.issueNumber}`,
                 timestamp: event.timestamp,
@@ -97,6 +104,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'Notification',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: `Pull request ready for review on #${event.issueNumber}`,
                 timestamp: event.timestamp,
@@ -106,6 +114,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'Stop',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: `Completed task #${event.issueNumber}`,
                 timestamp: event.timestamp,
@@ -115,6 +124,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
             return {
                 hook_event_name: 'Stop',
                 session_id: sessionId,
+                model,
                 issue_number: event.issueNumber,
                 message: `Failed task #${event.issueNumber}: ${event.details || 'unknown error'}`,
                 timestamp: event.timestamp,
@@ -122,7 +132,7 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string): PixelA
     }
 }
 
-function mapToolUseEvent(event: AgentActionEvent, sessionId: string): PixelAgentHookPayload {
+function mapToolUseEvent(event: AgentActionEvent, sessionId: string, model?: string): PixelAgentHookPayload {
     let toolName: string;
 
     switch (event.category) {
@@ -144,6 +154,7 @@ function mapToolUseEvent(event: AgentActionEvent, sessionId: string): PixelAgent
     return {
         hook_event_name: 'PreToolUse',
         session_id: sessionId,
+        model,
         tool_name: toolName,
         tool_input: event.input || { summary: event.summary },
         issue_number: event.issueNumber,
