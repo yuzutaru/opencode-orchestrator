@@ -80,9 +80,30 @@ check('starting -> SessionStart', () => {
         worktreePath: '/tmp/wt',
     } as TaskLifecycleEvent);
     assert.strictEqual(payload?.hook_event_name, 'SessionStart');
-    assert.strictEqual(payload?.session_id, 'sess-1');
+    assert.strictEqual(payload?.session_id, 'issue-42');
     assert.strictEqual(payload?.issue_number, 42);
     assert.strictEqual(payload?.title, 'Fix the thing');
+});
+
+check('session id stable across starting->planning->working', () => {
+    const starting = mapVisualEventToPixelHook({
+        ...base,
+        phase: 'starting',
+        worktreePath: '/tmp/wt',
+    } as TaskLifecycleEvent);
+    const planning = mapVisualEventToPixelHook({
+        ...base,
+        phase: 'planning',
+    } as TaskLifecycleEvent);
+    const working = mapVisualEventToPixelHook({
+        ...base,
+        phase: 'working',
+        branchName: 'fix/42',
+    } as TaskLifecycleEvent);
+    assert.strictEqual(starting?.session_id, 'issue-42');
+    assert.strictEqual(planning?.session_id, 'issue-42');
+    assert.strictEqual(working?.session_id, 'issue-42');
+    assert.notStrictEqual(starting?.session_id, 'sess-1');
 });
 
 check('blocked -> PermissionRequest', () => {
@@ -178,7 +199,7 @@ fs.mkdirSync(serversDir, { recursive: true });
 // Write a mock server descriptor (PID = current process, so it's "alive").
 fs.writeFileSync(
     path.join(serversDir, '1234.json'),
-    JSON.stringify({ port: 3999, pid: process.pid, authToken: 'abc' }),
+    JSON.stringify({ port: 3999, pid: process.pid, token: 'abc' }),
 );
 
 // A stale descriptor with a dead PID should be ignored.
@@ -198,7 +219,7 @@ try {
         const servers = client.findActiveServers();
         assert.strictEqual(servers.length, 1);
         assert.strictEqual(servers[0].port, 3999);
-        assert.strictEqual(servers[0].authToken, 'abc');
+        assert.strictEqual(servers[0].token, 'abc');
     });
 
     check('dispatches silently when no servers', async () => {
