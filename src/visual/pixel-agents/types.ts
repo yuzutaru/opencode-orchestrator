@@ -23,5 +23,6 @@ export interface PixelAgentServerInfo {
     port: number;
     pid?: number;
     authToken?: string;
+    token?: string;
     source: string;
 }

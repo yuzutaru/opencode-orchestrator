@@ -67,7 +67,14 @@ export class PixelAgentsClient {
             }
         }
 
-        return servers;
+        // Dedupe by port: server.json and servers/<pid>-<port>.json describe
+        // the same server; dispatching to both would POST every event twice.
+        const seen = new Set<number>();
+        return servers.filter((s) => {
+            if (seen.has(s.port)) return false;
+            seen.add(s.port);
+            return true;
+        });
     }
 
     private parseServerFile(filePath: string): PixelAgentServerInfo | null {
@@ -89,7 +96,8 @@ export class PixelAgentsClient {
             return {
                 port: data.port,
                 pid: data.pid,
-                authToken: data.authToken,
+                authToken: data.token ?? data.authToken,
+                token: data.token ?? data.authToken,
                 source: filePath,
             };
         } catch {
@@ -111,18 +119,16 @@ export class PixelAgentsClient {
 
         await Promise.allSettled(
             servers.map(async (server) => {
-                const endpoints = [
-                    `http://localhost:${server.port}/api/hooks/claude`,
-                    `http://localhost:${server.port}/api/hooks/opencode`,
-                ];
+                const endpoints = [`http://localhost:${server.port}/api/hooks/claude`];
 
                 for (const url of endpoints) {
                     try {
                         const headers: Record<string, string> = {
                             'Content-Type': 'application/json',
                         };
-                        if (server.authToken) {
-                            headers['Authorization'] = `Bearer ${server.authToken}`;
+                        const token = server.token ?? server.authToken;
+                        if (token) {
+                            headers['Authorization'] = `Bearer ${token}`;
                         }
 
                         const controller = new AbortController();
@@ -139,8 +145,9 @@ export class PixelAgentsClient {
                             logger.debug({ port: server.port, hook: payload.hook_event_name }, 'Hook dispatched');
                             return;
                         }
-                    } catch {
-                        // Silent fallback - server might not have the specific provider route or is shutting down
+                        logger.warn({ port: server.port, hook: payload.hook_event_name, url, status: res.status }, 'Hook dispatch returned non-ok');
+                    } catch (error) {
+                        logger.debug({ port: server.port, hook: payload.hook_event_name, url, error }, 'Hook dispatch failed');
                     }
                 }
             })

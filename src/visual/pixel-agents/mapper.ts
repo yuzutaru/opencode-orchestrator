@@ -8,7 +8,7 @@ import {
 import { PixelAgentHookPayload } from './types.js';
 
 export function mapVisualEventToPixelHook(event: VisualEvent, model?: string): PixelAgentHookPayload | null {
-    const sessionId = event.sessionId || `issue-${event.issueNumber}`;
+    const sessionId = `issue-${event.issueNumber}`;
 
     switch (event.type) {
         case 'task:lifecycle':
@@ -48,9 +48,11 @@ function mapLifecycleEvent(event: TaskLifecycleEvent, sessionId: string, model?:
 
         case 'planning':
             return {
-                hook_event_name: 'Notification',
+                hook_event_name: 'PreToolUse',
                 session_id: sessionId,
                 model,
+                tool_name: 'Read',
+                tool_input: { summary: `Planning implementation for #${event.issueNumber}` },
                 issue_number: event.issueNumber,
                 message: `Planning implementation for #${event.issueNumber}`,
                 timestamp: event.timestamp,
